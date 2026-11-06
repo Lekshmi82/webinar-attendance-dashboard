@@ -22,8 +22,7 @@ ALL = "__ALL__"
 
 st.markdown("""
 <style>
-div[data-testid="stMetric"] {background:#F8FAFC;border:1px solid #E2E8F0;border-radius:10px;padding:12px 16px;}
-@media (prefers-color-scheme: dark){div[data-testid="stMetric"]{background:#111827;border-color:#374151;}}
+div[data-testid="stMetric"] {background:#F8FAFC;border:1px solid #E2E8F0;border-radius:10px;padding:12px 16px;color:#0F172A;}
 .block-container {padding-top:1.5rem;}
 </style>""", unsafe_allow_html=True)
 

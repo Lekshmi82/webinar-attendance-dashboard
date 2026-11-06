@@ -218,59 +218,98 @@ def heatmap(n, r, title_):
 
 tabs = st.tabs(["Attendee report", "Overview", "Acquisition", "Demographics", "Work experience", "Deep analysis",
                 "Insights", "Data quality"])
-REPORT_SOURCES = [x for x in ("Ads", "Organic", "Retargeting", "Others") if x in set(people["source"])]
-rep_exp = pl.source_breakdown(people, "experience", REPORT_SOURCES, pl.EXP_ORDER, ok)
-rep_stage = pl.source_breakdown(people, "career_stage", REPORT_SOURCES, pl.STAGE_ORDER, ok)
-rep_aud = pl.source_breakdown(people, "audience", REPORT_SOURCES, ["Working professional", "Student", "Unknown"], ok)
-rep_role = pl.source_breakdown(people, "role", REPORT_SOURCES, list(role["role"]), ok)
-rep_intl = pl.source_breakdown(people, "international", REPORT_SOURCES, None, ok) if "international" in people else pd.DataFrame()
+_rep_src = [x for x in ("Ads", "Organic", "Retargeting", "Others") if x in set(people["source"])]
+rep_exp = pl.source_breakdown(people, "experience", _rep_src, pl.EXP_ORDER, ok)
+rep_stage = pl.source_breakdown(people, "career_stage", _rep_src, pl.STAGE_ORDER, ok)
+rep_aud = pl.source_breakdown(people, "audience", _rep_src, ["Working professional", "Student", "Unknown"], ok)
+rep_role = pl.source_breakdown(people, "role", _rep_src, list(role["role"]), ok)
+rep_intl = pl.source_breakdown(people, "international", _rep_src, None, ok) if "international" in people else pd.DataFrame()
+
+REPORT_SOURCES = ["Ads", "Organic", "Others"]
+REP_COLORS = {"Ads": "#2563EB", "Organic": "#16A34A", "Others": "#F59E0B", "Retargeting": "#9333EA"}
 
 
-def show_breakdown(df, label):
-    if df.empty:
-        return
-    st.markdown(f"**{label}**")
-    cols = [df.columns[0]] + [c for c in df.columns[1:] if not c.endswith("Attended")]
-    st.dataframe(df[cols].style.format({c: "{:.1f}%" for c in cols if c.endswith("%")} |
-                                       {c: "{:,.0f}" for c in cols if c.endswith("Registered")}, na_rep="–"),
-                 hide_index=True, use_container_width=True)
-    if ok:
-        long = df.melt(id_vars=df.columns[0], value_vars=[f"{s} · Attendance %" for s in REPORT_SOURCES],
-                       var_name="Source", value_name="Attendance %")
-        long["Source"] = long["Source"].str.replace(" · Attendance %", "", regex=False)
-        fig = px.bar(long, x=df.columns[0], y="Attendance %", color="Source", barmode="group",
-                     color_discrete_map=SRC_COLORS, text="Attendance %")
-        fig.update_traces(texttemplate="%{text:.0f}%", textposition="outside")
-        fig.update_layout(height=340, margin=dict(t=20, b=10), xaxis_title="", legend_title="")
-        st.plotly_chart(fig, use_container_width=True)
+def three_way(df, split_retarget):
+    d = df[df["source"] != "Unknown"].copy()
+    if not split_retarget:
+        d["source"] = d["source"].replace({"Retargeting": "Others"})
+    return d
+
+
+def by_source(d, order):
+    g = d.groupby("source").agg(Registered=("status", "size"),
+                                Attended=("status", lambda s: int((s == pl.ATTENDED).sum())))
+    g = g.reindex([o for o in order if o in g.index])
+    g["Attendance %"] = (g["Attended"] / g["Registered"] * 100).round(1)
+    return g.reset_index()
+
+
+def by_group(d, dim, order, min_n=10):
+    g = d.groupby([dim, "source"]).agg(Registered=("status", "size"),
+                                       Attended=("status", lambda s: int((s == pl.ATTENDED).sum()))).reset_index()
+    g = g[(g[dim] != "Unknown") & (g["Registered"] >= min_n)]
+    g["Attendance %"] = (g["Attended"] / g["Registered"] * 100).round(1)
+    if order:
+        g[dim] = pd.Categorical(g[dim], [o for o in order if o in set(g[dim])], ordered=True)
+        g = g.sort_values(dim)
+    return g
 
 
 with tabs[0]:
-    s_idx = src.set_index("source")
-    if ok and {"Ads", "Organic"} <= set(s_idx.index):
-        a_r, o_r = s_idx.loc["Ads", "Attendance %"], s_idx.loc["Organic", "Attendance %"]
-        c = st.columns(3)
-        c[0].metric("Ads attendance %", f"{a_r:.1f}%",
-                    f"{int(s_idx.loc['Ads', 'Attendees']):,} of {int(s_idx.loc['Ads', 'Registrations']):,}",
-                    delta_color="off")
-        c[1].metric("Organic attendance %", f"{o_r:.1f}%",
-                    f"{int(s_idx.loc['Organic', 'Attendees']):,} of {int(s_idx.loc['Organic', 'Registrations']):,}",
-                    delta_color="off")
-        c[2].metric("Gap (Organic − Ads)", f"{o_r - a_r:+.1f} pts",
-                    f"Organic attends {o_r / a_r:.1f}× Ads" if a_r else None, delta_color="off")
-    elif not ok:
-        st.error("Attendance is not verified for this selection. The report shows registrations only.")
-    st.markdown("**Registered vs attended by source**")
-    st.dataframe(fmt(src[["source", "Registrations", "Attendees", "No-shows", "Attendance %",
-                          "Registration share %", "Attendee share %"]]),
-                 hide_index=True, use_container_width=True)
-    st.caption("Retargeting (WhatsApp community and past leads) is kept separate from Organic so it doesn't "
-               "inflate the Organic rate.")
-    show_breakdown(rep_exp, "Work experience × source")
-    show_breakdown(rep_stage, "Career stage × source (experience bands grouped)")
-    show_breakdown(rep_aud, "Student vs working professional × source")
-    show_breakdown(rep_role, "Current role × source")
-    show_breakdown(rep_intl, "International lead × source")
+    split = st.toggle("Show Retargeting separately (otherwise it is counted in Others)", value=False)
+    order = ["Ads", "Organic", "Retargeting", "Others"] if split else REPORT_SOURCES
+    d = three_way(people, split)
+    t = by_source(d, order)
+    if not ok:
+        st.error("Attendance is not verified for this webinar, so only registrations are shown.")
+
+    # 1. Headline numbers
+    c = st.columns(len(t))
+    for col, r in zip(c, t.itertuples()):
+        col.metric(f"{r.source} attendance", f"{r._4:.1f}%" if ok else "N/A",
+                   f"{r.Attended:,} of {r.Registered:,} attended" if ok else f"{r.Registered:,} registered",
+                   delta_color="off")
+
+    # 2. One chart: registered vs attended per source
+    fig = go.Figure()
+    fig.add_bar(x=t["source"], y=t["Registered"], name="Registered", marker_color="#CBD5E1",
+                text=t["Registered"].map("{:,}".format), textposition="outside")
+    if ok:
+        fig.add_bar(x=t["source"], y=t["Attended"], name="Attended",
+                    marker_color=[REP_COLORS[s] for s in t["source"]],
+                    text=[f"{a:,} ({p:.0f}%)" for a, p in zip(t["Attended"], t["Attendance %"])],
+                    textposition="outside")
+    fig.update_layout(title="Registered vs attended by source", barmode="group", height=380,
+                      margin=dict(t=50, b=10, l=10, r=10), yaxis_title="People", legend_title="",
+                      legend=dict(orientation="h", y=1.12, x=1, xanchor="right"))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # 3. One chart: attendance % by demographic, per source
+    dims = {"Work experience": ("career_stage", pl.STAGE_ORDER),
+            "Student vs working professional": ("audience", ["Student", "Working professional"]),
+            "Current role": ("role", None)}
+    pick = st.radio("Break down by", list(dims), horizontal=True)
+    dim, dorder = dims[pick]
+    g = by_group(d, dim, dorder)
+    ycol = "Attendance %" if ok else "Registered"
+    fig = px.bar(g, x=dim, y=ycol, color="source", barmode="group", color_discrete_map=REP_COLORS,
+                 category_orders={"source": order}, text=ycol,
+                 hover_data={"Registered": ":,", "Attended": ":,"})
+    fig.update_traces(texttemplate="%{text:.0f}%" if ok else "%{text:,}", textposition="outside")
+    fig.update_layout(title=f"{'Attendance %' if ok else 'Registrations'} by {pick.lower()}", height=420,
+                      margin=dict(t=50, b=10, l=10, r=10), xaxis_title="", legend_title="",
+                      legend=dict(orientation="h", y=1.12, x=1, xanchor="right"))
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("Groups with fewer than 10 registrants are hidden. Hover a bar to see registered and attended counts.")
+
+    with st.expander("See table"):
+        wide = g.pivot_table(index=dim, columns="source", values=["Registered", "Attended", "Attendance %"],
+                             observed=True)
+        wide.columns = [f"{s} · {m}" for m, s in wide.columns]
+        wide = wide[[f"{s} · {m}" for s in order for m in ("Registered", "Attended", "Attendance %")
+                     if f"{s} · {m}" in wide.columns]]
+        st.dataframe(t, hide_index=True, use_container_width=True)
+        st.dataframe(wide, use_container_width=True)
 
 
 with tabs[1]:

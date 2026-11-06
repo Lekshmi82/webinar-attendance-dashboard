@@ -315,3 +315,23 @@ def data_quality(reg: Prepared, people: pd.DataFrame, webinar: str, att_info: At
     add("Personal columns removed on upload", ", ".join(reg.dropped_pii) or "none",
         "Never displayed, logged or exported")
     return pd.DataFrame(rows).astype({"Value": str})
+
+
+def source_breakdown(p: pd.DataFrame, dim: str, sources=("Ads", "Organic", "Retargeting", "Others"),
+                     order=None, rate_ok=True) -> pd.DataFrame:
+    """One row per group of `dim`; for each source: Registered, Attended, Attendance %."""
+    if dim not in p.columns:
+        return pd.DataFrame()
+    att = p["status"].eq(ATTENDED)
+    out = pd.DataFrame(index=pd.Index(order or sorted(p[dim].dropna().unique()), name=dim))
+    for s in list(sources) + ["Total"]:
+        q = p if s == "Total" else p[p["source"] == s]
+        n = q.groupby(dim).size()
+        a = att[q.index].groupby(q[dim]).sum()
+        out[f"{s} · Registered"] = n
+        out[f"{s} · Attended"] = a if rate_ok else np.nan
+        out[f"{s} · Attendance %"] = (a / n * 100).round(1) if rate_ok else np.nan
+    out = out.dropna(how="all", subset=[c for c in out.columns if c.endswith("Registered")])
+    out[[c for c in out.columns if c.endswith("Registered")]] = out[[c for c in out.columns
+                                                                     if c.endswith("Registered")]].fillna(0)
+    return out.reset_index()

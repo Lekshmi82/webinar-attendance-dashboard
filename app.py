@@ -216,10 +216,64 @@ def heatmap(n, r, title_):
     return fig
 
 
-tabs = st.tabs(["Overview", "Acquisition", "Demographics", "Work experience", "Deep analysis",
+tabs = st.tabs(["Attendee report", "Overview", "Acquisition", "Demographics", "Work experience", "Deep analysis",
                 "Insights", "Data quality"])
+REPORT_SOURCES = [x for x in ("Ads", "Organic", "Retargeting", "Others") if x in set(people["source"])]
+rep_exp = pl.source_breakdown(people, "experience", REPORT_SOURCES, pl.EXP_ORDER, ok)
+rep_stage = pl.source_breakdown(people, "career_stage", REPORT_SOURCES, pl.STAGE_ORDER, ok)
+rep_aud = pl.source_breakdown(people, "audience", REPORT_SOURCES, ["Working professional", "Student", "Unknown"], ok)
+rep_role = pl.source_breakdown(people, "role", REPORT_SOURCES, list(role["role"]), ok)
+rep_intl = pl.source_breakdown(people, "international", REPORT_SOURCES, None, ok) if "international" in people else pd.DataFrame()
+
+
+def show_breakdown(df, label):
+    if df.empty:
+        return
+    st.markdown(f"**{label}**")
+    cols = [df.columns[0]] + [c for c in df.columns[1:] if not c.endswith("Attended")]
+    st.dataframe(df[cols].style.format({c: "{:.1f}%" for c in cols if c.endswith("%")} |
+                                       {c: "{:,.0f}" for c in cols if c.endswith("Registered")}, na_rep="–"),
+                 hide_index=True, use_container_width=True)
+    if ok:
+        long = df.melt(id_vars=df.columns[0], value_vars=[f"{s} · Attendance %" for s in REPORT_SOURCES],
+                       var_name="Source", value_name="Attendance %")
+        long["Source"] = long["Source"].str.replace(" · Attendance %", "", regex=False)
+        fig = px.bar(long, x=df.columns[0], y="Attendance %", color="Source", barmode="group",
+                     color_discrete_map=SRC_COLORS, text="Attendance %")
+        fig.update_traces(texttemplate="%{text:.0f}%", textposition="outside")
+        fig.update_layout(height=340, margin=dict(t=20, b=10), xaxis_title="", legend_title="")
+        st.plotly_chart(fig, use_container_width=True)
+
 
 with tabs[0]:
+    s_idx = src.set_index("source")
+    if ok and {"Ads", "Organic"} <= set(s_idx.index):
+        a_r, o_r = s_idx.loc["Ads", "Attendance %"], s_idx.loc["Organic", "Attendance %"]
+        c = st.columns(3)
+        c[0].metric("Ads attendance %", f"{a_r:.1f}%",
+                    f"{int(s_idx.loc['Ads', 'Attendees']):,} of {int(s_idx.loc['Ads', 'Registrations']):,}",
+                    delta_color="off")
+        c[1].metric("Organic attendance %", f"{o_r:.1f}%",
+                    f"{int(s_idx.loc['Organic', 'Attendees']):,} of {int(s_idx.loc['Organic', 'Registrations']):,}",
+                    delta_color="off")
+        c[2].metric("Gap (Organic − Ads)", f"{o_r - a_r:+.1f} pts",
+                    f"Organic attends {o_r / a_r:.1f}× Ads" if a_r else None, delta_color="off")
+    elif not ok:
+        st.error("Attendance is not verified for this selection. The report shows registrations only.")
+    st.markdown("**Registered vs attended by source**")
+    st.dataframe(fmt(src[["source", "Registrations", "Attendees", "No-shows", "Attendance %",
+                          "Registration share %", "Attendee share %"]]),
+                 hide_index=True, use_container_width=True)
+    st.caption("Retargeting (WhatsApp community and past leads) is kept separate from Organic so it doesn't "
+               "inflate the Organic rate.")
+    show_breakdown(rep_exp, "Work experience × source")
+    show_breakdown(rep_stage, "Career stage × source (experience bands grouped)")
+    show_breakdown(rep_aud, "Student vs working professional × source")
+    show_breakdown(rep_role, "Current role × source")
+    show_breakdown(rep_intl, "International lead × source")
+
+
+with tabs[1]:
     c1, c2 = st.columns([1, 1])
     sc = people["status"].value_counts().reindex([pl.ATTENDED, pl.NOSHOW, pl.UNKNOWN]).fillna(0)
     fig = px.pie(values=sc.values, names=sc.index, hole=0.55, color=sc.index, color_discrete_map=STATUS_COLORS,
@@ -242,7 +296,7 @@ with tabs[0]:
             fig.update_layout(height=360)
             st.plotly_chart(fig, use_container_width=True)
 
-with tabs[1]:
+with tabs[2]:
     st.dataframe(fmt(src), hide_index=True, use_container_width=True)
     c1, c2 = st.columns(2)
     if ok and src["Attendees"].sum():
@@ -268,7 +322,7 @@ with tabs[1]:
     with st.expander("Classification rules (applied in order, first match wins)"):
         st.dataframe(clf.rules_table(), hide_index=True, use_container_width=True)
 
-with tabs[2]:
+with tabs[3]:
     c1, c2 = st.columns(2)
     c1.plotly_chart(bar_compare(aud, "audience", "Student vs working professional"), use_container_width=True)
     c2.plotly_chart(bar_compare(role, "role", "By current role"), use_container_width=True)
@@ -282,7 +336,7 @@ with tabs[2]:
     else:
         st.caption("City data is not available in this file, so city-wise analysis is skipped.")
 
-with tabs[3]:
+with tabs[4]:
     c1, c2 = st.columns(2)
     c1.plotly_chart(bar_compare(exp, "experience", "By work experience (as recorded)"), use_container_width=True)
     c2.plotly_chart(bar_compare(stage, "career_stage", "By career stage (harmonised)"), use_container_width=True)
@@ -291,7 +345,7 @@ with tabs[3]:
     st.caption("Form options changed over time ('0-2 years' vs '<1 years' + '1-2 years'). The career-stage view "
                "groups them so webinars can be compared.")
 
-with tabs[4]:
+with tabs[5]:
     c1, c2 = st.columns(2)
     c1.plotly_chart(heatmap(cn_exp, cr_exp, "Source × experience"), use_container_width=True)
     c2.plotly_chart(heatmap(cn_aud, cr_aud, "Source × audience"), use_container_width=True)
@@ -314,7 +368,7 @@ with tabs[4]:
         st.markdown("**No-show ranking (groups with ≥30 registrants)**")
         st.dataframe(ns_tbl.head(15), hide_index=True, use_container_width=True)
 
-with tabs[5]:
+with tabs[6]:
     st.markdown("### Insights")
     for i in insights:
         st.markdown(f"- {i}")
@@ -323,7 +377,7 @@ with tabs[5]:
         st.markdown(f"- {r}")
     st.caption(f"Insights only use segments with ≥{pl.MIN_SEGMENT} registrants. Every figure comes from the uploaded data.")
 
-with tabs[6]:
+with tabs[7]:
     st.dataframe(dq, hide_index=True, use_container_width=True)
     st.markdown("**Matching strategy**: registrants are de-duplicated within each webinar by UniqueLink "
                 "(then Submission ID, then Record ID). Attendance files are matched on the same non-personal IDs. "
@@ -343,7 +397,9 @@ meta = {"Report generated": dt.datetime.now().strftime("%Y-%m-%d %H:%M"), "Regis
         "Attendance % upper bound (if all unknown attended)": round(status["rate_upper"], 1)
         if status["rate_upper"] is not None else "n/a",
         "Excluded webinars (no verified attendance)": ", ".join(excluded) or "none"}
-sheets = {"Acquisition": src, "UTM source detail": detail, "Experience": exp, "Career stage": stage,
+sheets = {"Attendee report": src, "Experience x source": rep_exp, "Career stage x source": rep_stage,
+          "Audience x source": rep_aud, "Role x source": rep_role, "International x source": rep_intl,
+          "Acquisition": src, "UTM source detail": detail, "Experience": exp, "Career stage": stage,
           "Role": role, "Audience": aud, "International": intl, "City": city,
           "Src x Exp regs": cn_exp, "Src x Exp attend%": cr_exp if ok else None,
           "Src x Stage regs": cn_stage, "Src x Stage attend%": cr_stage if ok else None,

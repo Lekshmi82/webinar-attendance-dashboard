@@ -1,0 +1,8 @@
+# Never commit raw lead data
+*.csv
+*.xlsx
+*.xls
+data/
+__pycache__/
+.venv/
+.streamlit/secrets.toml
